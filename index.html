@@ -261,7 +261,7 @@ const cwrap=document.getElementById('cwrap');
 /* ====================== FIREBASE ====================== */
 function initFB(){
   try{
-    if(FB_CONFIG.apiKey && !FB_CONFIG.apiKey.startsWith('AIzaSyBqIExfuJKSilNu_FFQpqHuUp6_P5z31s4')){
+    if(FB_CONFIG.apiKey && !FB_CONFIG.apiKey.startsWith('PASTE')){
       firebase.initializeApp(FB_CONFIG);
       db=firebase.firestore();
       db.enablePersistence().catch(()=>{});
