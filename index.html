@@ -547,9 +547,21 @@ function refreshCaseSel(){
 }
 function saveCase(){
   collectForm(); saveLocal();
-  if(fbOn){db.collection(COLLECTION).doc(currentId).set(cases[currentId],{merge:true})
-    .then(()=>toast('Saved to Firebase')).catch(e=>toast('Saved locally (FB error)'));}
-  else toast('Saved (localStorage)');
+  if(fbOn){
+    try {
+      db.collection(COLLECTION).doc(currentId).set(cases[currentId],{merge:true})
+        .then(()=>toast('Saved to Firebase ✓'))
+        .catch(e=>{
+          console.error(e);
+          toast('FB Error: ' + e.message);
+        });
+    } catch(syncError) {
+      console.error(syncError);
+      toast('Crash Error: ' + syncError.message);
+    }
+  }else{
+    toast('Saved (localStorage)');
+  }
   refreshCaseSel(); document.getElementById('caseSel').value=currentId;
 }
 
