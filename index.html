@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 <style>
 :root{
   --bg:#0b0c0f; --surface:#16181d; --surface2:#1f232b; --sep:#2c313b;
@@ -235,9 +236,6 @@ const FB_CONFIG = {
 };
 const COLLECTION = "tka_measurements";
 
-// 👉 นำคีย์ API สตริงยาวๆ ที่ได้จากเว็บ ImgBB มาวางตรงนี้เพื่อเปิดระบบโฮสต์รูปภาพฟรี
-const IMGBB_API_KEY = "831caf1dc35f0f31104999ce8299bfa2"; 
-
 const PARAMS = [
   {key:'hka',  name:'HKA angle', type:'3pt', thr:3, ref180:true,
    hint:'Click 3 points: ① femoral head centre  ② knee centre (vertex)  ③ ankle centre — value = angle at knee (≈180°), deviation = |180 − value|'},
@@ -250,7 +248,7 @@ const PARAMS = [
 ];
 
 /* ====================== STATE ====================== */
-let db=null, fbOn=false;
+let db=null, fbOn=false, storage=null;
 let img=null, scale=1, ox=0, oy=0, imgName='';
 let activeParam=null, points=[], lastResult=null;
 let activeObs=1, activeFilm='post';
@@ -267,6 +265,7 @@ function initFB(){
     if(FB_CONFIG.apiKey && !FB_CONFIG.apiKey.startsWith('PASTE')){
       firebase.initializeApp(FB_CONFIG);
       db=firebase.firestore();
+      storage=firebase.storage(); 
       db.enablePersistence().catch(()=>{});
       fbOn=true;
       document.getElementById('fbDot').className='dot on';
@@ -404,12 +403,14 @@ function saveAchieved(v){
   const d=c.params[activeParam.key]=c.params[activeParam.key]||{};
   const val=Math.round(v*10)/10;
   
+  // ===== capture landmark coordinates for future ML training dataset =====
   if(img&&points.length){
     c.annotations=c.annotations||[];
     c.annotations.push({
       ts:new Date().toISOString(), param:activeParam.key, paramName:activeParam.name,
       type:activeParam.type, film:activeFilm, obs:(activeFilm==='post'?activeObs:0),
       value:val, image:imgName, imgW:img.width, imgH:img.height,
+      // บันทึกแบบ Object ป้องกันโครงสร้าง Nested Array ขัดกฎ Firebase
       points:points.map(p=>({ x: Math.round(p.x*10)/10, y: Math.round(p.y*10)/10 })),
       pointsNorm:points.map(p=>({ x: +(p.x/img.width).toFixed(4), y: +(p.y/img.height).toFixed(4) }))
     });
@@ -541,16 +542,17 @@ function fillForm(c){
   document.getElementById('fComp').value=c.comp||'';
   buildMeasureList();
   
+  // 🦴 ดึงภาพฟิล์มเด้งขึ้นหน้าจอข้ามเครื่องอัตโนมัติสำหรับ Observer 2
   if(c.imgUrl) {
-    toast('📥 Loading case image from free cloud...', 0); 
+    toast('📥 Loading case image from cloud...');
     img = new Image();
     img.onload = () => {
       document.getElementById('emptyState').style.display = 'none';
       fitImage();
-      toast('Image loaded successfully ✓', 1800);
+      toast('Image loaded successfully ✓');
     };
     img.onerror = () => {
-      toast('❌ Failed to load image from cloud', 3000);
+      toast('❌ Failed to load image from cloud');
     };
     img.src = c.imgUrl;
   } else {
@@ -566,53 +568,39 @@ function refreshCaseSel(){
     const o=document.createElement('option');o.value=id;o.textContent=id;sel.appendChild(o);});
   sel.value=cur;
 }
-
-// 💾 ระบบบันทึกเคสใหม่: ทำการฝากภาพผ่าน ImgBB API ฟรี แล้วส่งลิงก์มากระตุ้นบันทึกลง Firebase Firestore ต่อเนื่องกัน
 function saveCase(){
   collectForm(); saveLocal();
   if(fbOn){
     try {
       const c = cases[currentId];
       
+      // ถ้าพบว่าเครื่องมีการอัปโหลดหรือเปลี่ยนไฟล์รูปภาพใหม่
       if(currentImgBlob) {
-        toast('⏳ Uploading image to free cloud...', 0); // บังคับให้หน้าต่างแจ้งเตือนสีเขียวค้างไว้จนกว่ารูปจะเสร็จ
+        toast('⏳ Uploading image to cloud...');
+        const storageRef = storage.ref().child(`tka_images/${currentId}`);
         
-        let formData = new FormData();
-        formData.append("image", currentImgBlob);
-        
-        fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
-          method: "POST",
-          body: formData
-        })
-        .then(res => {
-          if(!res.ok) throw new Error("Image server rejected the upload");
-          return res.json();
-        })
-        .then(resData => {
-          if(resData && resData.data && resData.data.url) {
-            c.imgUrl = resData.data.url; // ยึดโยง URL ที่ได้จากระบบฝากรูปฟรี เข้าข้อสัญญากลุ่มข้อมูลเคส
-            return db.collection(COLLECTION).doc(currentId).set(c, {merge:true});
-          } else {
-            throw new Error("Invalid response from image host");
-          }
-        })
-        .then(() => {
-          toast('Saved case & image successfully ✓', 2000);
-          currentImgBlob = null; 
+        storageRef.put(currentImgBlob).then(snapshot => {
+          return snapshot.ref.getDownloadURL();
+        }).then(url => {
+          c.imgUrl = url; // บันทึก URL ลิงก์รูปภาพพ่วงเข้ากับข้อมูลผู้ป่วย
+          return db.collection(COLLECTION).doc(currentId).set(c, {merge:true});
+        }).then(() => {
+          toast('Saved case & image to Firebase ✓');
+          currentImgBlob = null; // ส่งภาพเสร็จสิ้น เคลียร์ตัวแปรออก
         }).catch(e => {
-          console.error(e);
-          toast('Image Upload Error: ' + e.message, 5000);
+          toast('Storage Error: ' + e.message);
         });
       } else {
+        // บันทึกเฉพาะข้อมูล Text ปกติ ในกรณีไม่ได้เปลี่ยนภาพใหม่
         db.collection(COLLECTION).doc(currentId).set(c, {merge:true})
-          .then(()=>toast('Saved to Firebase ✓', 1800))
-          .catch(e=>toast('FB Error: ' + e.message, 3000));
+          .then(()=>toast('Saved to Firebase ✓'))
+          .catch(e=>toast('FB Error: ' + e.message));
       }
     } catch(syncError) {
-      toast('Crash Error: ' + syncError.message, 3000);
+      toast('Crash Error: ' + syncError.message);
     }
   }else{
-    toast('Saved (localStorage)', 1800);
+    toast('Saved (localStorage)');
   }
   refreshCaseSel(); document.getElementById('caseSel').value=currentId;
 }
@@ -651,15 +639,17 @@ function exportCSV(){
   const blob=new Blob(['﻿'+lines.join('\n')],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download='TKA_measurements_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
-  toast('Exported CSV ('+Object.keys(cases).length+' cases)', 1800);
+  toast('Exported CSV ('+Object.keys(cases).length+' cases)');
 }
 function allAnnotations(){
   let out=[];
   Object.values(cases).forEach(c=>{
     (c.annotations||[]).forEach(a=>{
+      // ทำ Deep Copy ข้อมูลเพื่อแปลงโครงสร้างพิกัดจุดก่อนดาวน์โหลดออกไปใช้เทรนโมเดล
       let aCopy = JSON.parse(JSON.stringify(a));
       aCopy.studyId = c.studyId;
       
+      // แปลงกลุ่ม Object {x,y} สลับกลับไปเป็นโครงสร้าง Array ซ้อน Array [[x,y], [x,y]] สำหรับสคริปต์ Python
       if (aCopy.points && aCopy.points[0] && typeof aCopy.points[0] === 'object' && !Array.isArray(aCopy.points[0])) {
         aCopy.points = aCopy.points.map(p => [p.x, p.y]);
       }
@@ -675,14 +665,14 @@ function allAnnotations(){
 function updateAnnCount(){const el=document.getElementById('annN');if(el)el.textContent=allAnnotations().length;}
 function exportAnnotations(){
   const data=allAnnotations();
-  if(!data.length){toast('No labels yet — measure and save a value first', 2000);return;}
+  if(!data.length){toast('No labels yet — measure and save a value first');return;}
   const payload={format:'tka-landmarks-v1', exported:new Date().toISOString(),
     note:'points=pixel coords on original image (see image field); pointsNorm=normalized 0..1; type 3pt=[hip,knee,ankle], 2line=[L1a,L1b,L2a,L2b]',
     count:data.length, annotations:data};
   const blob=new Blob([JSON.stringify(payload,null,1)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download='TKA_landmarks_'+new Date().toISOString().slice(0,10)+'.json';a.click();
-  toast('Exported '+data.length+' labels (JSON) — keep the original images alongside for training', 2500);
+  toast('Exported '+data.length+' labels (JSON) — keep the original images alongside for training');
 }
 
 /* ====================== EVENTS ====================== */
@@ -709,7 +699,7 @@ document.getElementById('zFit').onclick=fitImage;
 
 function loadImageFile(file){
   if(!file)return; 
-  currentImgBlob = file; 
+  currentImgBlob = file; // จำไฟล์ภาพดิบเตรียมนำส่งไปฝากคลังคลาวด์ Storage
   imgName=file.name||('pasted_'+Date.now()+'.png'); const fr=new FileReader();
   fr.onload=()=>{img=new Image();img.onload=()=>{document.getElementById('emptyState').style.display='none';fitImage();};img.src=fr.result;};
   fr.readAsDataURL(file);
@@ -725,12 +715,12 @@ window.addEventListener('paste',e=>{
 document.querySelectorAll('[data-obs]').forEach(b=>b.onclick=()=>{
   activeObs=+b.dataset.obs;
   document.querySelectorAll('[data-obs]').forEach(x=>x.classList.toggle('active',x===b));
-  toast('Switched to Observer '+activeObs, 1500);
+  toast('Switched to Observer '+activeObs);
 });
 document.querySelectorAll('[data-film]').forEach(b=>b.onclick=()=>{
   activeFilm=b.dataset.film;
   document.querySelectorAll('[data-film]').forEach(x=>x.classList.toggle('active',x===b));
-  toast(activeFilm==='pre'?'Pre-op mode → saves as Planned':'Post-op mode → saves as Achieved', 1800);
+  toast(activeFilm==='pre'?'Pre-op mode → saves as Planned':'Post-op mode → saves as Achieved');
   if(activeParam&&points.length>=(activeParam.type==='3pt'?3:4))computeResult();
   updateHint();
 });
@@ -742,7 +732,7 @@ document.getElementById('btnSave').onclick=saveCase;
 document.getElementById('btnCsv').onclick=exportCSV;
 document.getElementById('btnAnn').onclick=exportAnnotations;
 document.getElementById('btnNew').onclick=()=>{
-  currentImgBlob=null; 
+  currentImgBlob=null; // เคลียร์เศษไฟล์ค้างเก่าออกเพื่อเริ่มโปรเจกต์ใหม่
   currentId=null; activeParam=null; points=[]; img=null;
   document.getElementById('emptyState').style.display='flex';
   document.getElementById('caseSel').value='';
@@ -761,11 +751,8 @@ document.getElementById('caseSel').onchange=e=>{
 };
 
 window.addEventListener('resize',resizeCanvas);
-function toast(m, duration=1800){
-  const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');
-  clearTimeout(t._t);
-  if(duration > 0) { t._t=setTimeout(()=>t.classList.remove('show'), duration); }
-}
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');
+  clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1800);}
 
 /* ====================== INIT ====================== */
 loadLocal(); initFB(); refreshCaseSel(); buildMeasureList(); resizeCanvas(); updateAnnCount();
