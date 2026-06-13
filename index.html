@@ -166,6 +166,16 @@ body{display:flex;flex-direction:column;overflow:hidden}
     </div>
 
     <div class="card">
+      <h3>Settings (ตั้งค่า)</h3>
+      <div class="row" style="margin-bottom:0">
+        <label style="width:100%;display:flex;align-items:center;gap:10px;cursor:pointer;color:var(--txt);font-size:13.5px">
+          <input type="checkbox" id="chkShowHud" style="width:16px;height:16px;margin:0;cursor:pointer">
+          <span style="font-weight:500">แสดงกล่องคู่มือซ้ายบน (Show HUD Guide)</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
       <h3>Angle measurement (click “Measure”, then click points on the image)</h3>
       <div class="measure-list" id="measureList"></div>
       <div class="hint-txt" id="paramHint" style="margin-top:8px"></div>
@@ -309,8 +319,9 @@ function draw(){
   if(!img)return;
   ctx.drawImage(img, ox, oy, img.width*scale, img.height*scale);
   
-  // 📋 1. วาดกล่องคู่มือสี่เหลี่ยมถาวรแบบ HUD ที่มุมซ้ายบนของรูปภาพฟิล์ม (Persistent On-Canvas HUD Guide)
-  if (activeParam && activeParam.labels) {
+  // 📋 1. วาดกล่องคู่มือสี่เหลี่ยมถาวรแบบ HUD (จะเรนเดอร์ก็ต่อเมื่อเปิดใช้งานจาก Settings เท่านั้น)
+  const chkShowHud = document.getElementById('chkShowHud');
+  if (chkShowHud && chkShowHud.checked && activeParam && activeParam.labels) {
     ctx.save();
     ctx.fillStyle = 'rgba(22, 24, 29, 0.88)';
     ctx.strokeStyle = '#2c313b';
@@ -334,15 +345,15 @@ function draw(){
     activeParam.labels.forEach((label, idx) => {
       const itemY = hudY + 46 + (idx * 22);
       if (idx === currentStep) {
-        ctx.fillStyle = '#ffd60a'; // แถบปัจจุบัน ไฮไลต์สีเหลืองสว่าง
+        ctx.fillStyle = '#ffd60a'; 
         ctx.font = 'bold 12px Inter';
         ctx.fillText(`➔  ${label} *`, hudX + 14, itemY);
       } else if (idx < currentStep) {
-        ctx.fillStyle = '#30d158'; // จุดที่ลงพิกัดเสร็จแล้ว เปลี่ยนเป็นติ๊กถูกสีเขียว
+        ctx.fillStyle = '#30d158'; 
         ctx.font = '500 12px Inter';
         ctx.fillText(`✓  ${label}`, hudX + 14, itemY);
       } else {
-        ctx.fillStyle = '#9aa3b2'; // จุดที่ยังรอคิวคัดกรองถัดไป สีเทาจาง
+        ctx.fillStyle = '#9aa3b2'; 
         ctx.font = '400 12px Inter';
         ctx.fillText(`      ${label}`, hudX + 14, itemY);
       }
@@ -360,52 +371,14 @@ function draw(){
       if(sp.length>=4){ctx.strokeStyle='#30d158';ctx.beginPath();ctx.moveTo(sp[2].x,sp[2].y);ctx.lineTo(sp[3].x,sp[3].y);ctx.stroke();}
     }
     
-    // วาดจุดแลนด์มาร์กพร้อมกล่องป้ายชื่อลอยข้างๆ ตัววงกลม
+    // วาดจุดวงกลมสีเหลืองพร้อมตัวเลขลำดับ (ข้อความแลนด์มาร์กข้างๆ จุดถูกถอนออกตามสั่งเพื่อความคลีน)
     sp.forEach((p,i)=>{
       ctx.fillStyle='#ffd60a';ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();
       ctx.fillStyle='#000';ctx.font='bold 11px Inter';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(i+1,p.x,p.y);
-      
-      if(activeParam && activeParam.labels && activeParam.labels[i]){
-        ctx.save();
-        ctx.fillStyle='rgba(11,12,15,0.85)';
-        ctx.strokeStyle='#2c313b';
-        ctx.lineWidth=1;
-        ctx.font='500 11px Inter';
-        ctx.textBaseline='middle';
-        ctx.textAlign='left';
-        const txt=activeParam.labels[i];
-        const txtW=ctx.measureText(txt).width;
-        ctx.fillRect(p.x+12, p.y-9, txtW+8, 18);
-        ctx.strokeRect(p.x+12, p.y-9, txtW+8, 18);
-        ctx.fillStyle='#f2f4f8';
-        ctx.fillText(txt, p.x+16, p.y);
-        ctx.restore();
-      }
     });
   }
 
-  // 🔵 2. วาดกล่องข้อความไกด์นำทางสีน้ำเงินลอยวิ่งตามพิกัดเป้าเมาส์ (Cursor Floating Guide Bubble)
-  const need = activeParam ? (activeParam.type==='3pt'?3:4) : 0;
-  if (activeParam && points.length < need && currentMouseScreen && draggedPointIndex === null) {
-    ctx.save();
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    ctx.font = 'bold 12px Inter';
-    const nextLabel = activeParam.labels[points.length];
-    const tw = ctx.measureText(nextLabel).width;
-    
-    // ตั้งค่าให้ลอยเยื้องเยื้องไปทางล่างขวาของเมาส์เล็กน้อยไม่ให้บังจุดพอยเตอร์
-    const mX = currentMouseScreen.x + 16;
-    const mY = currentMouseScreen.y + 16;
-    
-    ctx.fillStyle = 'rgba(10, 132, 255, 0.92)'; 
-    ctx.fillRect(mX, mY - 11, tw + 12, 22);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(nextLabel, mX + 6, mY);
-    ctx.restore();
-  }
-
-  // 🔍 ระบบเลนส์ซูมแว่นขยาย (Magnifying Glass Loupe) ตอนลากขยับปรับความละเอียด
+  // 🔍 ระบบเลนส์ซูมแว่นขยาย (Magnifying Glass Loupe) ตอนจับลาก Fine-tuning ปรับแก้ตำแหน่งจุด
   if(draggedPointIndex !== null && currentMouseScreen && sp[draggedPointIndex]) {
     const loupeR = 65;
     const loupeX = currentMouseScreen.x;
@@ -437,23 +410,6 @@ function draw(){
     sp.forEach((p,i)=>{
       ctx.fillStyle='#ffd60a';ctx.beginPath();ctx.arc(p.x,p.y,5/zoomFactor,0,7);ctx.fill();
       ctx.fillStyle='#000';ctx.font=`bold ${11/zoomFactor}px Inter`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(i+1,p.x,p.y);
-      
-      if(activeParam && activeParam.labels && activeParam.labels[i]){
-        ctx.save();
-        ctx.fillStyle='rgba(11,12,15,0.85)';
-        ctx.strokeStyle='#2c313b';
-        ctx.lineWidth=1/zoomFactor;
-        ctx.font=`500 ${11/zoomFactor}px Inter`;
-        ctx.textBaseline='middle';
-        ctx.textAlign='left';
-        const txt=activeParam.labels[i];
-        const txtW=ctx.measureText(txt).width;
-        ctx.fillRect(p.x+12/zoomFactor, p.y-9/zoomFactor, txtW+8/zoomFactor, 18/zoomFactor);
-        ctx.strokeRect(p.x+12/zoomFactor, p.y-9/zoomFactor, txtW+8/zoomFactor, 18/zoomFactor);
-        ctx.fillStyle='#f2f4f8';
-        ctx.fillText(txt, p.x+16/zoomFactor, p.y);
-        ctx.restore();
-      }
     });
 
     ctx.restore();
@@ -877,6 +833,9 @@ document.querySelectorAll('[data-film]').forEach(b=>b.onclick=()=>{
   if(activeParam&&points.length>=(activeParam.type==='3pt'?3:4))computeResult();
   updateHint();
 });
+
+// ดักจับการกดสวิตช์เปิด-ปิด HUD Guide เพื่อให้รีเฟรชหน้าแคนวาสทันทีที่ติ๊กเลือก
+document.getElementById('chkShowHud').onchange=draw;
 
 document.getElementById('fWeight').oninput=calcBMI;
 document.getElementById('fHeight').oninput=calcBMI;
