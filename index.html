@@ -254,6 +254,10 @@ let activeObs=1, activeFilm='post';
 let cases={};
 let currentId=null;
 
+// ตัวแปรควบคุมระบบขยับจุดแลนด์มาร์กและแว่นขยาย
+let draggedPointIndex = null;
+let currentMouseScreen = { x: 0, y: 0 };
+
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
 const cwrap=document.getElementById('cwrap');
 
@@ -301,9 +305,10 @@ function draw(){
   ctx.clearRect(0,0,r.width,r.height);
   if(!img)return;
   ctx.drawImage(img, ox, oy, img.width*scale, img.height*scale);
+  
+  const sp=points.map(toScr);
   if(points.length){
     ctx.lineWidth=2; ctx.strokeStyle='#0a84ff'; ctx.fillStyle='#ffd60a';
-    const sp=points.map(toScr);
     if(activeParam && activeParam.type==='3pt'){
       if(sp.length>=2){ctx.beginPath();ctx.moveTo(sp[0].x,sp[0].y);ctx.lineTo(sp[1].x,sp[1].y);if(sp[2])ctx.lineTo(sp[2].x,sp[2].y);ctx.stroke();}
     }else{
@@ -312,6 +317,62 @@ function draw(){
     }
     sp.forEach((p,i)=>{ctx.fillStyle='#ffd60a';ctx.beginPath();ctx.arc(p.x,p.y,5,0,7);ctx.fill();
       ctx.fillStyle='#000';ctx.font='bold 11px Inter';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(i+1,p.x,p.y);});
+  }
+
+  // 🔍 เรนเดอร์ระบบแว่นขยาย (Magnifying Glass Loupe) ตอนจับลากขยับจุด
+  if(draggedPointIndex !== null && currentMouseScreen && sp[draggedPointIndex]) {
+    const loupeR = 65; // รัศมีหน้าต่างวงกลมแว่นขยาย
+    const loupeX = currentMouseScreen.x;
+    const loupeY = currentMouseScreen.y - 100; // ลอยขึ้นเหนือพิกัดนิ้วมือ 100px ไม่ให้มือตัวเองบังสายตา
+    const zoomFactor = 2.5; // กำลังขยายเนื้อฟิล์ม 2.5 เท่า
+    const scrTarget = sp[draggedPointIndex];
+
+    ctx.save();
+    // ตัดมาส์กวงกลม
+    ctx.beginPath();
+    ctx.arc(loupeX, loupeY, loupeR, 0, Math.PI * 2);
+    ctx.clip();
+
+    // ถมดำกันเลนส์ทะลุเป็นช่องว่าง
+    ctx.fillStyle = '#000';
+    ctx.fillRect(loupeX - loupeR, loupeY - loupeR, loupeR * 2, loupeR * 2);
+
+    // คำนวณตารางเมทริกซ์การส่องซูมเนื้อภาพ
+    ctx.translate(loupeX, loupeY);
+    ctx.scale(zoomFactor, zoomFactor);
+    ctx.translate(-scrTarget.x, -scrTarget.y);
+
+    // วาดส่องภาพและรายละเอียดแลนด์มาร์กด้านในเลนส์ซูม
+    ctx.drawImage(img, ox, oy, img.width*scale, img.height*scale);
+    ctx.lineWidth = 2 / zoomFactor;
+    ctx.strokeStyle = '#0a84ff';
+    if(activeParam && activeParam.type==='3pt'){
+      if(sp.length>=2){ctx.beginPath();ctx.moveTo(sp[0].x,sp[0].y);ctx.lineTo(sp[1].x,sp[1].y);if(sp[2])ctx.lineTo(sp[2].x,sp[2].y);ctx.stroke();}
+    }else{
+      if(sp.length>=2){ctx.beginPath();ctx.moveTo(sp[0].x,sp[0].y);ctx.lineTo(sp[1].x,sp[1].y);ctx.stroke();}
+      if(sp.length>=4){ctx.strokeStyle='#30d158';ctx.beginPath();ctx.moveTo(sp[2].x,sp[2].y);ctx.lineTo(sp[3].x,sp[3].y);ctx.stroke();}
+    }
+    sp.forEach((p,i)=>{
+      ctx.fillStyle='#ffd60a';ctx.beginPath();ctx.arc(p.x,p.y,5/zoomFactor,0,7);ctx.fill();
+      ctx.fillStyle='#000';ctx.font=`bold ${11/zoomFactor}px Inter`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(i+1,p.x,p.y);
+    });
+
+    ctx.restore();
+
+    // วาดกรอบสแตนเลสครอบแว่นขยายภายนอก
+    ctx.beginPath();
+    ctx.arc(loupeX, loupeY, loupeR, 0, Math.PI * 2);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#0a84ff';
+    ctx.stroke();
+
+    // วาดเป้าเล็งกึ่งกลางสีแดง (Crosshair Center Spot)
+    ctx.beginPath();
+    ctx.moveTo(loupeX - 8, loupeY); ctx.lineTo(loupeX + 8, loupeY);
+    ctx.moveTo(loupeX, loupeY - 8); ctx.lineTo(loupeX, loupeY + 8);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#ff453a';
+    ctx.stroke();
   }
 }
 
@@ -367,7 +428,7 @@ function updateHint(){
   else labels=['Line1 — start','Line1 — end','Line2 — start','Line2 — end'];
   const ftag=`[${activeFilm==='pre'?'PRE-OP':'POST-OP'}] `;
   if(n<need) h.innerHTML=`${ftag}<b>${activeParam.name}</b> — click: ${labels[n]} (${n+1}/${need})`;
-  else h.innerHTML=`${ftag}<b>${activeParam.name}</b> — done · choose a save button below, or click again to redo`;
+  else h.innerHTML=`${ftag}<b>${activeParam.name}</b> — done · choose a save button below, or drag any circle to fine-tune`;
 }
 function placePoint(p){
   const need=activeParam.type==='3pt'?3:4;
@@ -544,8 +605,6 @@ function refreshCaseSel(){
     const o=document.createElement('option');o.value=id;o.textContent=id;sel.appendChild(o);});
   sel.value=cur;
 }
-
-// 💾 บันทึกเฉพาะข้อมูล Text ตัวเลข และพิกัดจุดลง Firebase Firestore โดยตรง (ปลอดภัย 100% รูปภาพเปิดแบบ Local)
 function saveCase(){
   collectForm(); saveLocal();
   if(fbOn){
@@ -628,16 +687,70 @@ function exportAnnotations(){
 
 /* ====================== EVENTS ====================== */
 let downPt=null, moved=false;
-cv.addEventListener('pointerdown',e=>{downPt={x:e.offsetX,y:e.offsetY};moved=false;cv.setPointerCapture(e.pointerId);});
+
+cv.addEventListener('pointerdown',e=>{
+  currentMouseScreen = { x: e.offsetX, y: e.offsetY };
+  moved=false;
+  draggedPointIndex = null;
+
+  // ตรวจสอบว่าผู้ใช้คลิกโดนวงกลมตำแหน่งเดิมที่มีอยู่แล้วหรือไม่ (ขอบเขตคลิก 20 พิกเซล)
+  if(img && activeParam && points.length > 0) {
+    const scrPoints = points.map(toScr);
+    for(let i=0; i<scrPoints.length; i++) {
+      const dx = e.offsetX - scrPoints[i].x;
+      const dy = e.offsetY - scrPoints[i].y;
+      if(Math.sqrt(dx*dx + dy*dy) < 20) {
+        draggedPointIndex = i; // เปิดโหมดจับลากจุดแลนด์มาร์ก
+        cv.setPointerCapture(e.pointerId);
+        return;
+      }
+    }
+  }
+
+  // หากไม่โดนจุดใดๆ จะถือเป็นการเลื่อนเล็งภาพฟิล์ม (Pan) ปกติ
+  downPt={x:e.offsetX,y:e.offsetY};
+  cv.setPointerCapture(e.pointerId);
+});
+
 cv.addEventListener('pointermove',e=>{
+  currentMouseScreen = { x: e.offsetX, y: e.offsetY };
+  
+  // กรณีขยับเปลี่ยนตำแหน่งจุดแลนด์มาร์กเดิม
+  if(draggedPointIndex !== null) {
+    points[draggedPointIndex] = toImg(e.offsetX, e.offsetY);
+    const need = activeParam.type==='3pt'?3:4;
+    if(points.length === need) {
+      computeResult(); // คำนวณมุมใหม่แบบ Real-time ทันทีที่ขยับมือ
+    }
+    updateHint();
+    draw();
+    return;
+  }
+
+  // กรณีจับลากสไลด์เลื่อนตัวแผ่นฟิล์ม
   if(!downPt)return;
   const dx=e.offsetX-downPt.x, dy=e.offsetY-downPt.y;
-  if(Math.abs(dx)+Math.abs(dy)>4){moved=true;ox+=e.movementX;oy+=e.movementY;draw();}
+  if(Math.abs(dx)+Math.abs(dy)>4){
+    moved=true;
+    ox+=e.movementX;
+    oy+=e.movementY;
+    draw();
+  }
 });
+
 cv.addEventListener('pointerup',e=>{
-  if(downPt&&!moved&&img&&activeParam){placePoint(toImg(e.offsetX,e.offsetY));}
+  if(draggedPointIndex !== null) {
+    draggedPointIndex = null;
+    updateHint();
+    draw();
+    return;
+  }
+  if(downPt&&!moved&&img&&activeParam){
+    placePoint(toImg(e.offsetX,e.offsetY));
+  }
   downPt=null;
 });
+
 cv.addEventListener('wheel',e=>{
   if(!img)return; e.preventDefault();
   const f=e.deltaY<0?1.1:1/1.1; const mx=e.offsetX,my=e.offsetY;
